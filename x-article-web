@@ -1,0 +1,635 @@
+#!/usr/bin/env python3
+"""
+X Article → PDF Web App
+=======================
+Lightweight web server that converts X articles to styled PDFs.
+All images are embedded as base64 for reliable rendering.
+PDFs are saved to disk so they survive a failed download.
+
+Access from any device on your network:
+    http://<your-ip>:8765/
+
+Usage:
+    x-article-web              # runs on http://0.0.0.0:8765
+    x-article-web --port 9000  # custom port
+"""
+
+import base64
+import http.server
+import json
+import os
+import re
+import shutil
+import socketserver
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Optional
+
+PORT = 8765
+DOWNLOAD_DIR = Path.home() / "Downloads" / "x-articles"
+CHROME = shutil.which("google-chrome") or shutil.which("chromium-browser") or shutil.which("chromium")
+
+if not CHROME:
+    print("❌ google-chrome / chromium not found. Install Chrome or Chromium first.")
+    sys.exit(1)
+
+DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ── helpers ──────────────────────────────────────────────────────────
+
+def extract_tweet_id(url: str) -> Optional[str]:
+    m = re.search(r'(?:x\.com|twitter\.com)/\w+/status/(\d+)', url)
+    return m.group(1) if m else None
+
+
+def fetch_article(tweet_id: str) -> dict:
+    api_url = f"https://api.fxtwitter.com/status/{tweet_id}"
+    req = urllib.request.Request(api_url, headers={"User-Agent": "x-article-pdf/1.0"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode())
+    if data.get("code") != 200:
+        raise ValueError(f"API error: {data.get('message', 'unknown')}")
+    tweet = data.get("tweet", {})
+    article = tweet.get("article")
+    if not article:
+        raise ValueError("Tweet is not an X Article (long-form post)")
+
+    # Build media_id → CDN URL map from article.media_entities
+    media_map = {}
+    for m in article.get("media_entities", []):
+        mid = m.get("media_id", "")
+        iurl = m.get("media_info", {}).get("original_img_url", "")
+        if mid and iurl:
+            media_map[mid] = iurl
+
+    return {
+        "title": article.get("title", ""),
+        "author": tweet.get("author", {}),
+        "created_at": tweet.get("created_at", ""),
+        "metrics": {
+            "likes": tweet.get("likes", 0),
+            "replies": tweet.get("replies", 0),
+            "retweets": tweet.get("retweets", 0),
+            "bookmarks": tweet.get("bookmarks", 0),
+            "views": tweet.get("views", 0),
+        },
+        "blocks": article.get("content", {}).get("blocks", []),
+        "entity_map": article.get("content", {}).get("entityMap", []),
+        "cover_url": (
+            article.get("cover_media", {})
+            .get("media_info", {})
+            .get("original_img_url")
+        ),
+        "media_map": media_map,
+        "url": f"https://x.com/{tweet.get('author', {}).get('screen_name', '')}/status/{tweet_id}",
+    }
+
+
+def dl_image(url: str, timeout: int = 10) -> str:
+    """Download an image and return it as a base64 data URI."""
+    if not url:
+        return ""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "x-article-pdf/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+        ct = resp.headers.get("Content-Type", "")
+        if "png" in ct:
+            mime = "image/png"
+        elif "gif" in ct:
+            mime = "image/gif"
+        elif "webp" in ct:
+            mime = "image/webp"
+        elif url.endswith(".png"):
+            mime = "image/png"
+        elif url.endswith(".gif"):
+            mime = "image/gif"
+        elif url.endswith(".webp"):
+            mime = "image/webp"
+        else:
+            mime = "image/jpeg"
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return url  # fallback: let Chrome try to fetch it
+
+
+def apply_inline_styles(text: str, ranges: list) -> str:
+    styled = text
+    for r in sorted(ranges, key=lambda x: -x.get("offset", 0)):
+        off = r.get("offset", 0)
+        length = r.get("length", 0)
+        style = r.get("style", "")
+        before = styled[:off]
+        mid = styled[off:off + length]
+        after = styled[off + length:]
+        if style == "Bold":
+            mid = f"<strong>{mid}</strong>"
+        elif style == "Italic":
+            mid = f"<em>{mid}</em>"
+        styled = before + mid + after
+    return styled
+
+
+def render_html(data: dict) -> str:
+    """Build a styled HTML page with base64-embedded images."""
+    # Pre-download images so they are guaranteed in the PDF
+    cover_data_uri = dl_image(data.get("cover_url", ""))
+    avatar_data_uri = dl_image(data.get("author", {}).get("avatar_url", ""))
+
+    # Pre-download all body images from media_map
+    media_map = data.get("media_map", {})
+    media_uris = {}
+    for mid, img_url in media_map.items():
+        uri = dl_image(img_url)
+        if uri and uri.startswith("data:"):
+            media_uris[mid] = uri
+
+    author = data["author"]
+    blocks = data["blocks"]
+    entity_map = data["entity_map"]
+
+    entities = {}
+    for i, ent in enumerate(entity_map):
+        entities[str(i)] = ent.get("value", ent)
+
+    css = """
+    @page { margin: 0; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        background: #000; color: #e7e9ea;
+        max-width: 600px; margin: 0 auto;
+        padding: 20px 16px; line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+    }
+    .article-header  { margin-bottom: 20px; }
+    .author-row      { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+    .avatar          { width: 48px; height: 48px; border-radius: 50%; flex-shrink: 0; overflow: hidden; background: #333; }
+    .avatar img      { width: 100%; height: 100%; object-fit: cover; }
+    .author-info     { flex: 1; }
+    .author-name     { font-weight: 700; font-size: 16px; color: #e7e9ea; display: flex; align-items: center; gap: 4px; }
+    .author-handle   { font-size: 14px; color: #71767b; }
+    .author-bio      { font-size: 13px; color: #71767b; margin-top: 2px; }
+    .verified-badge  { display: inline-block; width: 18px; height: 18px; border-radius: 50%;
+                       background: #1d9bf0; color: #fff; font-size: 11px;
+                       text-align: center; line-height: 18px; flex-shrink: 0; }
+    .cover-image     { width: 100%; border-radius: 16px; margin-bottom: 20px;
+                       border: 1px solid #2f3336; display: block; }
+    h1               { font-size: 24px; font-weight: 800; color: #e7e9ea;
+                       margin-bottom: 12px; line-height: 1.3; letter-spacing: -0.02em; }
+    .article-meta    { font-size: 13px; color: #71767b; margin-bottom: 20px;
+                       padding-bottom: 16px; border-bottom: 1px solid #2f3336; }
+    .article-body    { font-size: 16px; }
+    .article-body p  { margin-bottom: 16px; color: #e7e9ea; }
+    .article-body h2 { font-size: 20px; font-weight: 800; color: #e7e9ea; margin: 28px 0 12px; line-height: 1.3; }
+    .article-body blockquote {
+        margin: 16px 0; padding: 12px 16px;
+        border-left: 3px solid #1d9bf0; background: #0f0f0f;
+        border-radius: 4px; color: #e7e9ea; font-style: italic;
+    }
+    .article-body ul, .article-body ol { margin: 12px 0 16px 24px; color: #e7e9ea; }
+    .article-body li { margin-bottom: 8px; }
+    .divider         { margin: 28px 0; text-align: center; color: #333639; font-size: 18px; letter-spacing: 8px; }
+    strong           { font-weight: 700; }
+    em               { font-style: italic; }
+    .code-block      { background: #1d1d1d; padding: 12px 16px; border-radius: 8px;
+                       font-family: 'SF Mono', 'Consolas', 'Courier New', monospace;
+                       font-size: 13px; white-space: pre-wrap; overflow-x: auto;
+                       margin: 16px 0; border: 1px solid #2f3336; }
+    .body-image      { width: 100%; border-radius: 12px; margin: 16px 0;
+                       border: 1px solid #2f3336; display: block; }
+    .body-image-cap  { font-size: 13px; color: #71767b; text-align: center;
+                       margin: -8px 0 16px 0; font-style: italic; }
+    .metrics-bar     { display: flex; gap: 24px; padding: 16px 0;
+                       border-top: 1px solid #2f3336; margin-top: 24px;
+                       font-size: 14px; color: #71767b; flex-wrap: wrap; }
+    .metrics-bar .val { color: #e7e9ea; font-weight: 700; }
+    .footer          { margin-top: 28px; padding: 16px 0;
+                       border-top: 1px solid #2f3336;
+                       font-size: 12px; color: #71767b; text-align: center; }
+    a                { color: #1d9bf0; text-decoration: none; }
+    """
+
+    parts = [
+        '<!DOCTYPE html><html><head><meta charset="utf-8">',
+        f"<title>{data['title']}</title>",
+        f"<style>{css}</style>",
+        "</head><body>",
+    ]
+
+    # Author header with base64 avatar
+    parts.append('<div class="article-header"><div class="author-row">')
+    if avatar_data_uri:
+        parts.append(f'<div class="avatar"><img src="{avatar_data_uri}" alt=""/></div>')
+    else:
+        parts.append('<div class="avatar"></div>')
+    parts.append('<div class="author-info">')
+    verified = author.get("verification", {}).get("verified", False)
+    badge = '<span class="verified-badge">✓</span>' if verified else ""
+    parts.append(f'<div class="author-name">{author.get("name","")} {badge}</div>')
+    parts.append(f'<div class="author-handle">@{author.get("screen_name","")}</div>')
+    bio = author.get("description", "")
+    if bio:
+        parts.append(f'<div class="author-bio">{bio}</div>')
+    parts.append("</div></div></div>")
+
+    # Cover image (base64-embedded)
+    if cover_data_uri:
+        parts.append(f'<img class="cover-image" src="{cover_data_uri}" alt=""/>')
+
+    # Title + meta
+    parts.append(f"<h1>{data['title']}</h1>")
+    parts.append(f"<div class='article-meta'>{data['created_at']}</div>")
+
+    # Body
+    parts.append('<div class="article-body">')
+    for block in blocks:
+        typ = block.get("type", "unstyled")
+        text = block.get("text", "")
+        sty_ranges = block.get("inlineStyleRanges", [])
+        ent_ranges = block.get("entityRanges", [])
+
+        if typ == "atomic":
+            if not ent_ranges:
+                parts.append('<div class="divider">· · ·</div>')
+                continue
+            for er in ent_ranges:
+                key = str(er.get("key", 0))
+                ent = entities.get(key, {})
+                etype = ent.get("type", "")
+                edata = ent.get("data", {})
+                if etype == "DIVIDER":
+                    parts.append('<div class="divider">· · ·</div>')
+                elif etype == "LINK":
+                    parts.append(f'<p><a href="{edata.get("url","")}">{edata.get("url","")}</a></p>')
+                elif etype == "MARKDOWN":
+                    parts.append(f'<div class="code-block">{edata.get("markdown","")}</div>')
+                elif etype == "TWEET":
+                    tid = edata.get("tweetId", "")
+                    parts.append(f'<blockquote>↗ <a href="https://x.com/i/status/{tid}">Embedded tweet</a></blockquote>')
+                elif etype == "MEDIA":
+                    media_items = edata.get("mediaItems", [])
+                    for item in media_items:
+                        mid = item.get("mediaId", "")
+                        uri = media_uris.get(mid, "")
+                        caption = edata.get("caption", "")
+                        if uri:
+                            parts.append(f'<img class="body-image" src="{uri}" alt=""/>')
+                            if caption:
+                                parts.append(f'<div class="body-image-cap">{caption}</div>')
+                else:
+                    parts.append('<div class="divider">· · ·</div>')
+            continue
+
+        if typ == "header-two":
+            parts.append(f"<h2>{text}</h2>")
+            continue
+
+        if typ in ("ordered-list-item", "unordered-list-item"):
+            styled = apply_inline_styles(text, sty_ranges)
+            parts.append(f"<li>{styled}</li>")
+            continue
+
+        if typ == "blockquote" and text.strip():
+            styled = apply_inline_styles(text, sty_ranges)
+            parts.append(f"<blockquote>{styled}</blockquote>")
+            continue
+
+        if text.strip():
+            styled = apply_inline_styles(text, sty_ranges)
+            parts.append(f"<p>{styled}</p>")
+        # Also render any MEDIA entities attached to this block
+        for er in ent_ranges:
+            key = str(er.get("key", 0))
+            ent = entities.get(key, {})
+            etype = ent.get("type", "")
+            if etype == "MEDIA":
+                edata = ent.get("data", {})
+                media_items = edata.get("mediaItems", [])
+                for item in media_items:
+                    mid = item.get("mediaId", "")
+                    uri = media_uris.get(mid, "")
+                    caption = edata.get("caption", "")
+                    if uri:
+                        parts.append(f'<img class="body-image" src="{uri}" alt=""/>')
+                        if caption:
+                            parts.append(f'<div class="body-image-cap">{caption}</div>')
+            elif etype == "TWEMOJI":
+                pass  # inline emoji handled via unicode text already
+
+    parts.append("</div>")
+
+    # Metrics
+    m = data["metrics"]
+    parts.append(
+        '<div class="metrics-bar">'
+        f'<div><span class="val">{m["views"]:,}</span> Views</div>'
+        f'<div><span class="val">{m["replies"]}</span> Replies</div>'
+        f'<div><span class="val">{m["retweets"]}</span> Reposts</div>'
+        f'<div><span class="val">{m["likes"]}</span> Likes</div>'
+        f'<div><span class="val">{m["bookmarks"]}</span> Bookmarks</div>'
+        "</div>"
+    )
+
+    parts.append(f'<div class="footer">Saved from <a href="{data["url"]}">X Article</a></div>')
+    parts.append("</body></html>")
+    return "\n".join(parts)
+
+
+def generate_pdf(html: str, tweet_id: str, title: str) -> tuple[bytes, str]:
+    """Render HTML to PDF via Chrome headless.
+    Returns (pdf_bytes, disk_path) — the PDF is saved persistently on disk.
+    """
+    safe_title = re.sub(r'[^\w\s-]', '', title)[:60].strip().replace(' ', '_') or tweet_id
+    pdf_path = str(DOWNLOAD_DIR / f"{safe_title}.pdf")
+
+    with tempfile.NamedTemporaryFile(suffix=".html", prefix="x-article-", delete=False, mode="w") as f:
+        f.write(html)
+        tmp_html = f.name
+
+    try:
+        subprocess.run(
+            [CHROME, "--headless", "--disable-gpu", "--no-margins",
+             "--disable-software-rasterizer",
+             f"--print-to-pdf={pdf_path}",
+             "--print-to-pdf-no-header",
+             f"file://{tmp_html}"],
+            check=True, capture_output=True, timeout=30,
+        )
+        # If the PDF already existed (re-convert), overwrite is fine
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+        return pdf_bytes, pdf_path
+    finally:
+        os.unlink(tmp_html)
+
+
+# ── HTTP server ──────────────────────────────────────────────────────
+
+PAGE_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>X Article → PDF</title>
+<style>
+ * { margin:0; padding:0; box-sizing:border-box; }
+ body {
+   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+   background: #000; color: #e7e9ea;
+   min-height: 100vh; display: flex; align-items: center; justify-content: center;
+ }
+ .card {
+   background: #15181c; border-radius: 16px;
+   padding: 40px 32px; width: 520px; max-width: 94vw;
+   border: 1px solid #2f3336;
+ }
+ h1 { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
+ p.sub { color: #71767b; font-size: 14px; margin-bottom: 24px; }
+ label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #e7e9ea; }
+ input[type="url"] {
+   width: 100%; padding: 12px 16px; border-radius: 8px;
+   border: 1px solid #2f3336; background: #000; color: #e7e9ea;
+   font-size: 15px; outline: none; transition: border-color 0.2s;
+ }
+ input[type="url"]:focus { border-color: #1d9bf0; }
+ input[type="url"]::placeholder { color: #536471; }
+ button {
+   width: 100%; margin-top: 16px; padding: 12px;
+   background: #1d9bf0; color: #fff; border: none; border-radius: 24px;
+   font-size: 16px; font-weight: 700; cursor: pointer; transition: background 0.2s;
+ }
+ button:hover { background: #1a8cd8; }
+ button:disabled { opacity: 0.5; cursor: not-allowed; }
+ .status { margin-top: 16px; font-size: 14px; color: #71767b; text-align: center; min-height: 20px; }
+ .status.error { color: #f4212e; }
+ .status.ok { color: #00ba7c; }
+ .example { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2f3336; font-size: 13px; color: #536471; }
+ .example code { color: #71767b; background: #0f0f0f; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+ .logo { font-size: 28px; margin-bottom: 12px; }
+ .footer { margin-top: 24px; font-size: 12px; color: #536471; text-align: center; }
+ .footer a { color: #1d9bf0; text-decoration: none; }
+ .spinner { display: none; margin: 12px auto 0; width: 24px; height: 24px;
+   border: 3px solid #2f3336; border-top-color: #1d9bf0; border-radius: 50%;
+   animation: spin .8s linear infinite; }
+ @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">📄</div>
+  <h1>X Article → PDF</h1>
+  <p class="sub">Paste an X article link to download a styled PDF for offline reading.</p>
+  <form id="form" method="POST" action="/convert">
+    <label for="url">Article URL</label>
+    <input type="url" id="url" name="url"
+           placeholder="https://x.com/user/status/1234567890"
+           required autofocus>
+    <button type="submit" id="btn">Convert to PDF</button>
+  </form>
+  <div id="status" class="status"></div>
+  <div id="spinner" class="spinner"></div>
+  <div class="example">
+    Example: <code>https://x.com/IBuzovskyi/status/2066145326780518736</code>
+  </div>
+</div>
+<div class="footer">
+  Open source &middot; Powered by Chrome headless &middot; PDFs saved to server
+</div>
+<script>
+const form = document.getElementById('form');
+const btn = document.getElementById('btn');
+const status = document.getElementById('status');
+const spinner = document.getElementById('spinner');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const url = document.getElementById('url').value.trim();
+  if (!url) return;
+
+  btn.disabled = true;
+  status.className = 'status';
+  status.textContent = 'Fetching article and generating PDF…';
+  spinner.style.display = 'block';
+
+  try {
+    const resp = await fetch('/convert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'url=' + encodeURIComponent(url),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      status.className = 'status error';
+      status.textContent = err || 'Something went wrong';
+      spinner.style.display = 'none';
+      return;
+    }
+
+    // Stream the PDF download
+    const blob = await resp.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = resp.headers.get('X-Filename') || 'article.pdf';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+
+    status.className = 'status ok';
+    status.textContent = '✅ Downloaded! Also saved to server at ~/Downloads/x-articles/';
+    spinner.style.display = 'none';
+  } catch (err) {
+    status.className = 'status error';
+    status.textContent = 'Network error — is the server running?';
+    spinner.style.display = 'none';
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
+"""
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        sys.stderr.write(f"[x-article-web] {args[0]} {args[1]} {args[2]}\n")
+
+    def _send_json(self, code, body):
+        body_bytes = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body_bytes)))
+        self.end_headers()
+        self.wfile.write(body_bytes)
+
+    def _send_html(self, code, html):
+        body = html.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/" or self.path == "/index.html":
+            self._send_html(200, PAGE_HTML)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        if self.path != "/convert":
+            self._send_json(404, {"error": "Not found"})
+            return
+
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8")
+        params = urllib.parse.parse_qs(body)
+        url = (params.get("url") or [""])[0].strip()
+
+        if not url:
+            self._send_json(400, {"error": "URL is required"})
+            return
+
+        tweet_id = extract_tweet_id(url)
+        if not tweet_id:
+            self._send_json(400, {"error": "Invalid X/Twitter URL. Use format: https://x.com/user/status/1234567890"})
+            return
+
+        try:
+            data = fetch_article(tweet_id)
+            html = render_html(data)
+            pdf_bytes, pdf_path = generate_pdf(html, tweet_id, data['title'])
+
+            # Nice filename for the download
+            safe_title = re.sub(r'[^\w\s-]', '', data['title'])[:60].strip().replace(' ', '_')
+            filename = f"{safe_title}.pdf" if safe_title else f"{tweet_id}-article.pdf"
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("X-Filename", filename)
+            self.send_header("Content-Length", str(len(pdf_bytes)))
+            self.end_headers()
+            self.wfile.write(pdf_bytes)
+
+            size_kb = len(pdf_bytes) / 1024
+            print(f"  ✓ {data['title'][:60]}… → {pdf_path} ({size_kb:.0f} KB)", flush=True)
+
+        except ValueError as e:
+            self._send_json(400, {"error": str(e)})
+        except urllib.error.URLError:
+            self._send_json(502, {"error": "Failed to fetch article — network issue or invalid URL"})
+        except subprocess.TimeoutExpired:
+            self._send_json(500, {"error": "PDF generation timed out (article may be very long)"})
+        except Exception as e:
+            self._send_json(500, {"error": f"Internal error: {e}"})
+
+
+def get_local_ip() -> str:
+    """Get the primary non-loopback IPv4 address."""
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.1)
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3)
+        ips = out.stdout.strip().split()
+        if ips:
+            return ips[0]
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
+def main():
+    port = PORT
+    for i, arg in enumerate(sys.argv[1:]):
+        if arg == "--port" and i + 2 < len(sys.argv):
+            port = int(sys.argv[i + 2])
+        elif arg.startswith("--port="):
+            port = int(arg.split("=", 1)[1])
+
+    local_ip = get_local_ip()
+
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.TCPServer(("0.0.0.0", port), Handler) as httpd:
+        print(f"""
+┌────────────────────────────────────────────┐
+│  📄 X Article → PDF Web App                │
+│                                            │
+│  Local:   http://127.0.0.1:{port}          │""")
+        if local_ip != "127.0.0.1":
+            print(f"""│  Network: http://{local_ip}:{port}              │""")
+        print(f"""│                                            │
+│  Open on your phone/tablet to download     │
+│  PDFs directly from X article links!       │
+│                                            │
+│  PDFs saved to:                            │
+│    ~/Downloads/x-articles/                 │
+│                                            │
+│  Ctrl+C to stop                            │
+└────────────────────────────────────────────┘""", flush=True)
+        httpd.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

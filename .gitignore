@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Temp files from testing
+/tmp/test-*.pdf
+/tmp/x-article-*.html
+
+# macOS
+.DS_Store
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Local test outputs
+*.pdf
+!x-article-pdf
+!x-article-web

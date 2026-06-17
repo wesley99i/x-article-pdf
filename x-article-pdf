@@ -1,0 +1,441 @@
+#!/usr/bin/env python3
+"""
+X Article to PDF Converter
+===========================
+Converts an X (Twitter) article link to a styled PDF for offline reading.
+All images are pre-downloaded and embedded as base64 for reliable rendering.
+
+Usage:
+    x-article-pdf <x-article-url> [output.pdf]
+    x-article-pdf https://x.com/IBuzovskyi/status/2066145326780518736
+
+If no output path is given, saves to ~/Downloads/<tweet-id>-article.pdf
+"""
+
+import base64
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from pathlib import Path
+
+
+# ── helpers ──────────────────────────────────────────────────────────
+
+def extract_tweet_id(url: str) -> str:
+    m = re.search(r'(?:x\.com|twitter\.com)/\w+/status/(\d+)', url)
+    if m:
+        return m.group(1)
+    raise ValueError(f"Could not extract tweet ID from: {url}")
+
+
+def fetch_article(tweet_id: str) -> dict:
+    api_url = f"https://api.fxtwitter.com/status/{tweet_id}"
+    req = urllib.request.Request(api_url, headers={"User-Agent": "x-article-pdf/1.0"})
+    with urllib.request.urlopen(req) as resp:
+        data = json.loads(resp.read().decode())
+
+    if data.get("code") != 200:
+        raise ValueError(f"API error: {data.get('message', 'unknown')}")
+
+    tweet = data.get("tweet", {})
+    article = tweet.get("article")
+    if not article:
+        raise ValueError("That tweet does not contain an X Article (long-form post).")
+
+    # Build media_id → CDN URL map from article.media_entities
+    media_map = {}
+    for m in article.get("media_entities", []):
+        mid = m.get("media_id", "")
+        iurl = m.get("media_info", {}).get("original_img_url", "")
+        if mid and iurl:
+            media_map[mid] = iurl
+
+    return {
+        "title": article.get("title", ""),
+        "author": tweet.get("author", {}),
+        "created_at": tweet.get("created_at", ""),
+        "metrics": {
+            "likes": tweet.get("likes", 0),
+            "replies": tweet.get("replies", 0),
+            "retweets": tweet.get("retweets", 0),
+            "bookmarks": tweet.get("bookmarks", 0),
+            "views": tweet.get("views", 0),
+        },
+        "blocks": article.get("content", {}).get("blocks", []),
+        "entity_map": article.get("content", {}).get("entityMap", []),
+        "cover_url": (
+            article.get("cover_media", {})
+            .get("media_info", {})
+            .get("original_img_url")
+        ),
+        "media_map": media_map,
+        "url": f"https://x.com/{tweet.get('author', {}).get('screen_name', '')}/status/{tweet_id}",
+    }
+
+
+def dl_image(url: str, timeout: int = 10) -> str:
+    """Download an image and return it as a base64 data URI."""
+    if not url:
+        return ""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "x-article-pdf/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+        # Determine MIME type from URL extension or Content-Type header
+        ct = resp.headers.get("Content-Type", "")
+        if "png" in ct:
+            mime = "image/png"
+        elif "gif" in ct:
+            mime = "image/gif"
+        elif "webp" in ct:
+            mime = "image/webp"
+        elif url.endswith(".png"):
+            mime = "image/png"
+        elif url.endswith(".gif"):
+            mime = "image/gif"
+        elif url.endswith(".webp"):
+            mime = "image/webp"
+        else:
+            mime = "image/jpeg"  # default for .jpg/.jpeg
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    except Exception as e:
+        # If download fails, return the original URL — Chrome may still fetch it
+        return url
+
+
+def apply_inline_styles(text: str, ranges: list) -> str:
+    """Apply Bold/Italic inline style ranges to plain text."""
+    styled = text
+    for r in sorted(ranges, key=lambda x: -x.get("offset", 0)):
+        off = r.get("offset", 0)
+        length = r.get("length", 0)
+        style = r.get("style", "")
+        before = styled[:off]
+        mid = styled[off:off + length]
+        after = styled[off + length:]
+        if style == "Bold":
+            mid = f"<strong>{mid}</strong>"
+        elif style == "Italic":
+            mid = f"<em>{mid}</em>"
+        styled = before + mid + after
+    return styled
+
+
+def render_html(data: dict) -> str:
+    """Build a styled HTML page with base64-embedded images."""
+
+    # Pre-download images so they are guaranteed in the PDF
+    cover_data_uri = dl_image(data.get("cover_url", ""))
+    avatar_url = data.get("author", {}).get("avatar_url", "")
+    avatar_data_uri = dl_image(avatar_url)
+
+    # Pre-download all body images from media_map
+    media_map = data.get("media_map", {})
+    media_uris = {}  # media_id -> base64 data URI
+    for mid, img_url in media_map.items():
+        uri = dl_image(img_url)
+        if uri and uri.startswith("data:"):
+            media_uris[mid] = uri
+
+    author = data["author"]
+    blocks = data["blocks"]
+    entity_map = data["entity_map"]
+
+    # Build entity lookup
+    entities = {}
+    for i, ent in enumerate(entity_map):
+        entities[str(i)] = ent.get("value", ent)
+
+    css = """
+    @page { margin: 0; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        background: #000; color: #e7e9ea;
+        max-width: 600px; margin: 0 auto;
+        padding: 20px 16px; line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── author header ── */
+    .article-header  { margin-bottom: 20px; }
+    .author-row      { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+    .avatar          { width: 48px; height: 48px; border-radius: 50%; flex-shrink: 0; overflow: hidden;
+                       background: #333; }
+    .avatar img      { width: 100%; height: 100%; object-fit: cover; }
+    .author-info     { flex: 1; }
+    .author-name     { font-weight: 700; font-size: 16px; color: #e7e9ea; display: flex; align-items: center; gap: 4px; }
+    .author-handle   { font-size: 14px; color: #71767b; }
+    .author-bio      { font-size: 13px; color: #71767b; margin-top: 2px; }
+    .verified-badge  { display: inline-block; width: 18px; height: 18px; border-radius: 50%;
+                       background: #1d9bf0; color: #fff; font-size: 11px;
+                       text-align: center; line-height: 18px; flex-shrink: 0; }
+
+    /* ── cover ── */
+    .cover-image     { width: 100%; border-radius: 16px; margin-bottom: 20px;
+                       border: 1px solid #2f3336; display: block; }
+
+    /* ── title ── */
+    h1               { font-size: 24px; font-weight: 800; color: #e7e9ea;
+                       margin-bottom: 12px; line-height: 1.3; letter-spacing: -0.02em; }
+
+    /* ── meta line ── */
+    .article-meta    { font-size: 13px; color: #71767b; margin-bottom: 20px;
+                       padding-bottom: 16px; border-bottom: 1px solid #2f3336; }
+
+    /* ── body ── */
+    .article-body    { font-size: 16px; }
+
+    .article-body p  { margin-bottom: 16px; color: #e7e9ea; }
+    .article-body h2 { font-size: 20px; font-weight: 800; color: #e7e9ea;
+                       margin: 28px 0 12px; line-height: 1.3; letter-spacing: -0.01em; }
+    .article-body blockquote {
+        margin: 16px 0; padding: 12px 16px;
+        border-left: 3px solid #1d9bf0; background: #0f0f0f;
+        border-radius: 4px; color: #e7e9ea; font-style: italic;
+    }
+    .article-body ul, .article-body ol { margin: 12px 0 16px 24px; color: #e7e9ea; }
+    .article-body li { margin-bottom: 8px; }
+
+    .divider         { margin: 28px 0; text-align: center; color: #333639;
+                       font-size: 18px; letter-spacing: 8px; }
+
+    strong           { font-weight: 700; }
+    em               { font-style: italic; }
+
+    .code-block      { background: #1d1d1d; padding: 12px 16px; border-radius: 8px;
+                       font-family: 'SF Mono', 'Consolas', 'Courier New', monospace;
+                       font-size: 13px; white-space: pre-wrap; overflow-x: auto;
+                       margin: 16px 0; border: 1px solid #2f3336; }
+
+    /* ── body images ── */
+    .body-image      { width: 100%; border-radius: 12px; margin: 16px 0;
+                       border: 1px solid #2f3336; display: block; }
+    .body-image-cap  { font-size: 13px; color: #71767b; text-align: center;
+                       margin: -8px 0 16px 0; font-style: italic; }
+
+    /* ── metrics bar ── */
+    .metrics-bar     { display: flex; gap: 24px; padding: 16px 0;
+                       border-top: 1px solid #2f3336; margin-top: 24px;
+                       font-size: 14px; color: #71767b; flex-wrap: wrap; }
+    .metrics-bar .val { color: #e7e9ea; font-weight: 700; }
+
+    /* ── footer ── */
+    .footer          { margin-top: 28px; padding: 16px 0;
+                       border-top: 1px solid #2f3336;
+                       font-size: 12px; color: #71767b; text-align: center; }
+    a                { color: #1d9bf0; text-decoration: none; }
+    """
+
+    parts = [
+        '<!DOCTYPE html><html><head><meta charset="utf-8">',
+        f"<title>{data['title']}</title>",
+        f"<style>{css}</style>",
+        "</head><body>",
+    ]
+
+    # ── author header (base64-embedded avatar) ──
+    parts.append('<div class="article-header"><div class="author-row">')
+    if avatar_data_uri:
+        parts.append(f'<div class="avatar"><img src="{avatar_data_uri}" alt=""/></div>')
+    else:
+        parts.append('<div class="avatar"></div>')
+
+    parts.append('<div class="author-info">')
+    verified = author.get("verification", {}).get("verified", False)
+    badge = '<span class="verified-badge">✓</span>' if verified else ""
+    parts.append(f'<div class="author-name">{author.get("name","")} {badge}</div>')
+    parts.append(f'<div class="author-handle">@{author.get("screen_name","")}</div>')
+    bio = author.get("description", "")
+    if bio:
+        parts.append(f'<div class="author-bio">{bio}</div>')
+    parts.append("</div></div></div>")
+
+    # ── cover image (base64-embedded) ──
+    if cover_data_uri:
+        parts.append(f'<img class="cover-image" src="{cover_data_uri}" alt=""/>')
+
+    # ── title ──
+    parts.append(f"<h1>{data['title']}</h1>")
+
+    # ── meta ──
+    parts.append(f"<div class='article-meta'>{data['created_at']}</div>")
+
+    # ── body ──
+    parts.append('<div class="article-body">')
+
+    for block in blocks:
+        typ = block.get("type", "unstyled")
+        text = block.get("text", "")
+        sty_ranges = block.get("inlineStyleRanges", [])
+        ent_ranges = block.get("entityRanges", [])
+
+        # Atomic blocks carry entities (code blocks, dividers, linked tweets)
+        if typ == "atomic":
+            if not ent_ranges:
+                parts.append('<div class="divider">· · ·</div>')
+                continue
+            for er in ent_ranges:
+                key = str(er.get("key", 0))
+                ent = entities.get(key, {})
+                etype = ent.get("type", "")
+                edata = ent.get("data", {})
+                if etype == "DIVIDER":
+                    parts.append('<div class="divider">· · ·</div>')
+                elif etype == "LINK":
+                    url = edata.get("url", "")
+                    parts.append(f'<p><a href="{url}">{url}</a></p>')
+                elif etype == "MARKDOWN":
+                    parts.append(f'<div class="code-block">{edata.get("markdown","")}</div>')
+                elif etype == "TWEET":
+                    tid = edata.get("tweetId", "")
+                    parts.append(f'<blockquote>↗ <a href="https://x.com/i/status/{tid}">Embedded tweet</a></blockquote>')
+                elif etype == "MEDIA":
+                    media_items = edata.get("mediaItems", [])
+                    for item in media_items:
+                        mid = item.get("mediaId", "")
+                        uri = media_uris.get(mid, "")
+                        caption = edata.get("caption", "")
+                        if uri:
+                            parts.append(f'<img class="body-image" src="{uri}" alt=""/>')
+                            if caption:
+                                parts.append(f'<div class="body-image-cap">{caption}</div>')
+            continue
+
+        # Headers
+        if typ == "header-two":
+            parts.append(f"<h2>{text}</h2>")
+            continue
+
+        # List items (we wrap in enclosing ul/ol at block level — the blocks
+        # come pre-grouped, each as a separate block with list type)
+        if typ in ("ordered-list-item", "unordered-list-item"):
+            tag = "ol" if typ == "ordered-list-item" else "ul"
+            styled = apply_inline_styles(text, sty_ranges)
+            parts.append(f"<li>{styled}</li>")
+            continue
+
+        # Blockquote
+        if typ == "blockquote":
+            if text.strip():
+                styled = apply_inline_styles(text, sty_ranges)
+                parts.append(f"<blockquote>{styled}</blockquote>")
+            continue
+
+        # Default paragraph (may also contain entity references like MEDIA)
+        if text.strip():
+            styled = apply_inline_styles(text, sty_ranges)
+            parts.append(f"<p>{styled}</p>")
+        # Also render any MEDIA entities attached to this block
+        for er in ent_ranges:
+            key = str(er.get("key", 0))
+            ent = entities.get(key, {})
+            etype = ent.get("type", "")
+            if etype == "MEDIA":
+                edata = ent.get("data", {})
+                media_items = edata.get("mediaItems", [])
+                for item in media_items:
+                    mid = item.get("mediaId", "")
+                    uri = media_uris.get(mid, "")
+                    caption = edata.get("caption", "")
+                    if uri:
+                        parts.append(f'<img class="body-image" src="{uri}" alt=""/>')
+                        if caption:
+                            parts.append(f'<div class="body-image-cap">{caption}</div>')
+            elif etype == "TWEMOJI":
+                pass  # inline emoji handled via unicode text already
+
+    parts.append("</div>")  # end article-body
+
+    # ── metrics ──
+    m = data["metrics"]
+    parts.append(
+        '<div class="metrics-bar">'
+        f'<div><span class="val">{m["views"]:,}</span> Views</div>'
+        f'<div><span class="val">{m["replies"]}</span> Replies</div>'
+        f'<div><span class="val">{m["retweets"]}</span> Reposts</div>'
+        f'<div><span class="val">{m["likes"]}</span> Likes</div>'
+        f'<div><span class="val">{m["bookmarks"]}</span> Bookmarks</div>'
+        "</div>"
+    )
+
+    # ── footer ──
+    parts.append(
+        f'<div class="footer">'
+        f'Saved from <a href="{data["url"]}">X Article</a> &mdash; '
+        f'Generated by x-article-pdf'
+        f'</div>'
+    )
+
+    parts.append("</body></html>")
+    return "\n".join(parts)
+
+
+# ── main ─────────────────────────────────────────────────────────────
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        sys.exit(0 if sys.argv[1:] and sys.argv[1] in ("-h", "--help") else 1)
+
+    url = sys.argv[1]
+
+    # Parse output path
+    tweet_id = extract_tweet_id(url)
+    if len(sys.argv) >= 3:
+        out_path = sys.argv[2]
+    else:
+        out_dir = Path.home() / "Downloads"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = str(out_dir / f"{tweet_id}-article.pdf")
+
+    print(f"📡 Fetching article: {url}")
+    data = fetch_article(tweet_id)
+    title = data['title']
+    print(f"   Title: {title[:80]}…" if len(title) > 80 else f"   Title: {title}")
+    print(f"   Author: {data['author'].get('name','')} (@{data['author'].get('screen_name','')})")
+
+    print("📝 Rendering HTML with embedded images…")
+    html = render_html(data)
+
+    print("🖨️  Generating PDF via Chrome (headless)…")
+    with tempfile.NamedTemporaryFile(suffix=".html", prefix="x-article-", delete=False) as f:
+        tmp_html = f.name
+        f.write(html.encode("utf-8"))
+
+    try:
+        subprocess.run(
+            [
+                "google-chrome",
+                "--headless",
+                "--disable-gpu",
+                "--no-margins",
+                "--disable-software-rasterizer",
+                f"--print-to-pdf={out_path}",
+                f"--print-to-pdf-no-header",
+                f"file://{tmp_html}",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        size_kb = os.path.getsize(out_path) / 1024
+        print(f"✅ Done! Saved to: {out_path}")
+        print(f"   File size: {size_kb:.0f} KB")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Chrome failed: {e.stderr.decode() if e.stderr else str(e)}")
+        sys.exit(1)
+    except FileNotFoundError:
+        print("❌ google-chrome not found. Is Chrome/Chromium installed?")
+        sys.exit(1)
+    finally:
+        os.unlink(tmp_html)
+
+
+if __name__ == "__main__":
+    main()
