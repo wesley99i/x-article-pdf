@@ -611,7 +611,7 @@ PAGE_HTML = """\
   </div>
 </div>
 <div class="footer">
-  Open source &middot; Powered by Chrome headless &middot; PDFs saved to server
+  <a href="/library">📚 Library</a> &middot; Open source &middot; Powered by Chrome headless
 </div>
 <script>
 const form = document.getElementById('form');
@@ -736,11 +736,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with open(filepath, "rb") as f:
                 data = f.read()
             self.send_response(200)
+            dl_param = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("dl", [""])[0]
+            disposition = "attachment" if dl_param == "1" else "inline"
             self.send_header("Content-Type", "application/pdf")
-            self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+            self.send_header("Content-Disposition", f'{disposition}; filename="{filename}"')
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+        elif self.path == "/library":
+            self._send_html(200, self._render_library())
         else:
             self.send_response(404)
             self.end_headers()
@@ -847,6 +851,88 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 results.append({"url": url, "success": False, "error": str(e)[:100]})
 
         self._send_json(200, {"results": results})
+
+    def _render_library(self) -> str:
+        """Render the library page showing all saved PDFs with sizes and dates."""
+        files = []
+        for f in sorted(DOWNLOAD_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if f.suffix.lower() == ".pdf":
+                stat = f.stat()
+                size_kb = stat.st_size / 1024
+                mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime))
+                # Build a short title by stripping .pdf and decoding underscores
+                title = f.stem.replace("_", " ")
+                files.append({
+                    "name": f.name,
+                    "title": title,
+                    "size_kb": size_kb,
+                    "mtime": mtime,
+                })
+
+        file_rows = "".join(
+            f"""<tr>
+            <td class="fname"><a href="/download/{urllib.parse.quote(f['name'])}">{f['title'][:80]}</a></td>
+            <td class="fsize">{f['size_kb']:.0f} KB</td>
+            <td class="fdate">{f['mtime']}</td>
+            <td class factions">
+              <a class="dl-btn" href="/download/{urllib.parse.quote(f['name'])}?dl=1">⬇ Download</a>
+            </td>
+          </tr>"""
+            for f in files
+        ) if files else "<tr><td colspan='4' class='empty'>No PDFs yet — convert an article first!</td></tr>"
+
+        count = len(files)
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Library — X Article → PDF</title>
+<style>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #000; color: #e7e9ea;
+  min-height: 100vh; padding: 40px 16px;
+}}
+.card {{
+  background: #15181c; border-radius: 16px;
+  padding: 32px; max-width: 800px; margin: 0 auto;
+  border: 1px solid #2f3336;
+}}
+h1 {{ font-size: 22px; font-weight: 800; margin-bottom: 4px; }}
+.sub {{ color: #71767b; font-size: 14px; margin-bottom: 20px; }}
+table {{ width: 100%; border-collapse: collapse; }}
+th {{ text-align: left; font-size: 12px; color: #536471; text-transform: uppercase;
+     letter-spacing: 0.05em; padding: 8px 4px; border-bottom: 1px solid #2f3336; }}
+td {{ padding: 10px 4px; border-bottom: 1px solid #1d1f23; font-size: 14px; }}
+.fname a {{ color: #e7e9ea; text-decoration: none; }}
+.fname a:hover {{ color: #1d9bf0; }}
+.fsize {{ color: #71767b; width: 70px; }}
+.fdate {{ color: #71767b; width: 140px; }}
+.factions {{ width: 100px; text-align: right; }}
+.dl-btn {{ color: #1d9bf0; text-decoration: none; font-size: 13px; font-weight: 600; }}
+.dl-btn:hover {{ text-decoration: underline; }}
+.empty {{ text-align: center; color: #536471; padding: 40px 0 !important; font-size: 14px; }}
+.back {{ display: inline-block; margin-top: 20px; color: #1d9bf0; text-decoration: none; font-size: 14px; }}
+.back:hover {{ text-decoration: underline; }}
+.count {{ color: #71767b; font-size: 13px; margin-bottom: 16px; }}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>📄 PDF Library</h1>
+  <p class="sub">Saved X articles on this server</p>
+  <div class="count">{count} file{'s' if count != 1 else ''}</div>
+  <table>
+    <thead><tr><th>Title</th><th>Size</th><th>Date</th><th></th></tr></thead>
+    <tbody>{file_rows}</tbody>
+  </table>
+  <a class="back" href="/">← Back to converter</a>
+</div>
+</body>
+</html>"""
+        return html
 
 
 def get_local_ip() -> str:
