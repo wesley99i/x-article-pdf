@@ -550,7 +550,8 @@ body {
 .nav-link:hover, .nav-link.active { color: #e7e9ea; }
 .hamburger {
   display: none; background: none; border: none; color: #e7e9ea;
-  font-size: 24px; cursor: pointer; padding: 4px; line-height: 1;
+  font-size: 28px; cursor: pointer; padding: 8px 12px; line-height: 1;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
 }
 @media (max-width: 600px) {
   .site-nav { display: none; }
@@ -649,10 +650,10 @@ p.sub { color: #71767b; font-size: 14px; margin-bottom: 24px; }
   <div class="header-inner">
     <a href="/" class="site-logo">📄 X Article → PDF</a>
     <nav class="site-nav" id="siteNav">
-      <a href="/" class="nav-link">Converter</a>
-      <a href="/library" class="nav-link">Library</a>
+      <a href="/" class="nav-link" onclick="document.getElementById('siteNav').classList.remove('open')">Converter</a>
+      <a href="/library" class="nav-link" onclick="document.getElementById('siteNav').classList.remove('open')">Library</a>
     </nav>
-    <button class="hamburger" id="hamburger" aria-label="Menu">☰</button>
+    <button class="hamburger" id="hamburger" aria-label="Menu" onclick="document.getElementById('siteNav').classList.toggle('open')">☰</button>
   </div>
 </header>
 <main class="main-content">
@@ -696,17 +697,6 @@ const spinner = document.getElementById('spinner');
 const resultsDiv = document.getElementById('results');
 const pasteBtn = document.getElementById('pasteBtn');
 const urlsInput = document.getElementById('urls');
-
-// Hamburger menu toggle for mobile
-const hamburger = document.getElementById('hamburger');
-const siteNav = document.getElementById('siteNav');
-hamburger.addEventListener('click', () => {
-  siteNav.classList.toggle('open');
-});
-// Close nav when a link is clicked (mobile)
-siteNav.addEventListener('click', () => {
-  siteNav.classList.remove('open');
-});
 
 // Paste button — reads clipboard and fills textarea
 pasteBtn.addEventListener('click', async () => {
@@ -1027,7 +1017,8 @@ td {{ padding: 10px 4px; border-bottom: 1px solid #1d1f23; font-size: 14px; }}
 .nav-link:hover, .nav-link.active {{ color: #e7e9ea; }}
 .hamburger {{
   display: none; background: none; border: none; color: #e7e9ea;
-  font-size: 24px; cursor: pointer; padding: 4px; line-height: 1;
+  font-size: 28px; cursor: pointer; padding: 8px 12px; line-height: 1;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
 }}
 @media (max-width: 600px) {{
   .site-nav {{ display: none; }}
@@ -1061,10 +1052,10 @@ td {{ padding: 10px 4px; border-bottom: 1px solid #1d1f23; font-size: 14px; }}
   <div class="header-inner">
     <a href="/" class="site-logo">📄 X Article → PDF</a>
     <nav class="site-nav" id="siteNav">
-      <a href="/" class="nav-link">Converter</a>
-      <a href="/library" class="nav-link active">Library</a>
+      <a href="/" class="nav-link" onclick="document.getElementById('siteNav').classList.remove('open')">Converter</a>
+      <a href="/library" class="nav-link active" onclick="document.getElementById('siteNav').classList.remove('open')">Library</a>
     </nav>
-    <button class="hamburger" id="hamburger" aria-label="Menu">☰</button>
+    <button class="hamburger" id="hamburger" aria-label="Menu" onclick="document.getElementById('siteNav').classList.toggle('open')">☰</button>
   </div>
 </header>
 <main class="main-content">
@@ -1087,12 +1078,6 @@ td {{ padding: 10px 4px; border-bottom: 1px solid #1d1f23; font-size: 14px; }}
     <div class="footer-info">x-article-pdf &middot; Chrome headless</div>
   </div>
 </footer>
-<script>
-const hamburger = document.getElementById('hamburger');
-const siteNav = document.getElementById('siteNav');
-hamburger.addEventListener('click', () => {{ siteNav.classList.toggle('open'); }});
-siteNav.addEventListener('click', () => {{ siteNav.classList.remove('open'); }});
-</script>
 </body>
 </html>"""
         return html
