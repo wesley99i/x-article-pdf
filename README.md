@@ -44,14 +44,56 @@ x-article-pdf --help
 ### Web App Usage
 
 ```bash
-# Start the server (default port: 8765)
+# Make sure the script is executable (do this once)
+chmod +x x-article-web
+
+# Run directly from the project directory
+./x-article-web
+
+# Or copy to your PATH for global access
+cp x-article-web ~/.local/bin/
+
+# Then from anywhere:
 x-article-web
 
-# Custom port
+# Custom port (default: 8765)
 x-article-web --port 9000
 ```
 
-Then open `http://<your-ip>:8765/` on any device on your network.
+**What you'll see on startup:**
+
+```
+┌────────────────────────────────────────────┐
+│  📄 X Article → PDF Web App                │
+│                                            │
+│  Local:   http://127.0.0.1:8765            │
+│  Network: http://192.168.1.42:8765         │
+│                                            │
+│  Open on your phone/tablet to download     │
+│  PDFs directly from X article links!       │
+│                                            │
+│  PDFs saved to:                            │
+│    ~/Downloads/x-articles/                 │
+│                                            │
+│  Ctrl+C to stop                            │
+└────────────────────────────────────────────┘
+```
+
+**Accessing from other devices on your network:**
+
+- **From the same computer:** http://127.0.0.1:8765/
+- **From your phone / tablet / another computer:** use the **Network** URL shown on startup (e.g. http://192.168.1.42:8765/)
+- If you don't see a Network line, the server couldn't auto-detect your IP — find it manually:
+  ```bash
+  # Linux
+  hostname -I | awk '{print $1}'
+  
+  # macOS
+  ipconfig getifaddr en0
+  ```
+  Then open `http://<that-ip>:8765/` on your other device.
+
+All devices must be on the same Wi-Fi / local network.
 
 **Batch conversion:** Paste multiple X article URLs (one per line) into the textarea, or click the **📋 Paste** button to read directly from your clipboard. Click **Convert All** — each article is fetched, converted to PDF, and saved to `~/Downloads/x-articles/`. Results show clickable download links for successful conversions and error messages for any failures.
 
