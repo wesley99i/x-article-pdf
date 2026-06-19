@@ -16,6 +16,24 @@
 - `x-article-web` — new HTML form, JS, endpoints, and CSS for batch workflow (904 lines, +130 lines)
 - `CHANGELOG.md` — This entry
 
+## 2026-06-19 — v1.2.1 — UI fixes
+
+**Fixed page loading, mobile UX, and UI structure.**
+
+**Fixes:**
+- Switched from single-threaded `TCPServer` to `ThreadingTCPServer` — main page and library now load instantly even while batch conversions are running
+- Removed `autofocus` on textarea to fix mobile keyboard fighting
+- Bumped textarea font-size to 16px to prevent iOS auto-zoom on focus
+- Reduced card padding on screens <500px for better mobile screen use
+- Duplicate CSS rules cleaned up
+
+**Features:**
+- Mobile-first sticky header with navigation links (Converter, Library) and hamburger menu
+- Proper footer with Library link and GitHub link
+- /library page — table of all saved PDFs with open/download links
+- /download/ endpoint now supports `?dl=1` to force download vs inline view
+- Library page shares same header/footer with active nav indicator
+
 ## 2026-06-16 — Initial release
 
 ### v1.0.0 — CLI tool + Web app
