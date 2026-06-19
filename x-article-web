@@ -522,18 +522,74 @@ PAGE_HTML = """\
 <title>X Article → PDF</title>
 <style>
  * { margin:0; padding:0; box-sizing:border-box; }
- body {
-   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-   background: #000; color: #e7e9ea;
-   min-height: 100vh; display: flex; align-items: center; justify-content: center;
- }
- .card {
-   background: #15181c; border-radius: 16px;
-   padding: 40px 32px; width: 520px; max-width: 94vw;
-   border: 1px solid #2f3336;
- }
- h1 { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
- p.sub { color: #71767b; font-size: 14px; margin-bottom: 24px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #000; color: #e7e9ea;
+  min-height: 100vh; display: flex; flex-direction: column;
+}
+
+/* ── header ── */
+.site-header {
+  background: #15181c; border-bottom: 1px solid #2f3336;
+  position: sticky; top: 0; z-index: 100;
+}
+.header-inner {
+  max-width: 800px; margin: 0 auto;
+  padding: 12px 16px; display: flex;
+  align-items: center; justify-content: space-between;
+}
+.site-logo {
+  font-size: 18px; font-weight: 700; color: #e7e9ea;
+  text-decoration: none; display: flex; align-items: center; gap: 6px;
+}
+.site-nav { display: flex; gap: 24px; align-items: center; }
+.nav-link {
+  color: #71767b; text-decoration: none; font-size: 14px; font-weight: 500;
+  transition: color 0.2s;
+}
+.nav-link:hover, .nav-link.active { color: #e7e9ea; }
+.hamburger {
+  display: none; background: none; border: none; color: #e7e9ea;
+  font-size: 24px; cursor: pointer; padding: 4px; line-height: 1;
+}
+@media (max-width: 600px) {
+  .site-nav { display: none; }
+  .site-nav.open {
+    display: flex; position: absolute; top: 100%; left: 0; right: 0;
+    background: #15181c; flex-direction: column; padding: 8px 16px 16px;
+    gap: 12px; border-bottom: 1px solid #2f3336;
+  }
+  .hamburger { display: block; }
+}
+
+/* ── main ── */
+.main-content {
+  max-width: 800px; margin: 0 auto; padding: 24px 16px;
+  flex: 1; width: 100%;
+}
+
+.card {
+  background: #15181c; border-radius: 16px;
+  padding: 40px 32px; width: 520px; max-width: 100%;
+  border: 1px solid #2f3336; margin: 0 auto;
+}
+
+/* ── footer ── */
+.site-footer {
+  border-top: 1px solid #2f3336; background: #15181c;
+}
+.footer-inner {
+  max-width: 800px; margin: 0 auto; padding: 16px;
+  display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: 8px;
+}
+.footer-links { display: flex; gap: 16px; }
+.footer-links a { color: #71767b; text-decoration: none; font-size: 13px; }
+.footer-links a:hover { color: #1d9bf0; }
+.footer-info { color: #536471; font-size: 12px; }
+
+h1 { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
+p.sub { color: #71767b; font-size: 14px; margin-bottom: 24px; }
  label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #e7e9ea; }
  input[type="url"] {
    width: 100%; padding: 12px 16px; border-radius: 8px;
@@ -579,8 +635,6 @@ PAGE_HTML = """\
  .result-item a:hover { text-decoration: underline; }
  .result-item .size { color: #71767b; font-size: 12px; }
  .result-summary { margin-top: 12px; font-size: 13px; color: #71767b; text-align: center; }
- .footer { margin-top: 24px; font-size: 12px; color: #536471; text-align: center; }
- .footer a { color: #1d9bf0; text-decoration: none; }
  .spinner { display: none; margin: 12px auto 0; width: 24px; height: 24px;
    border: 3px solid #2f3336; border-top-color: #1d9bf0; border-radius: 50%;
    animation: spin .8s linear infinite; }
@@ -588,6 +642,17 @@ PAGE_HTML = """\
 </style>
 </head>
 <body>
+<header class="site-header">
+  <div class="header-inner">
+    <a href="/" class="site-logo">📄 X Article → PDF</a>
+    <nav class="site-nav" id="siteNav">
+      <a href="/" class="nav-link">Converter</a>
+      <a href="/library" class="nav-link">Library</a>
+    </nav>
+    <button class="hamburger" id="hamburger" aria-label="Menu">☰</button>
+  </div>
+</header>
+<main class="main-content">
 <div class="card">
   <div class="logo">📄</div>
   <h1>X Article → PDF</h1>
@@ -610,9 +675,16 @@ PAGE_HTML = """\
     Paste multiple URLs — one per line — and click <strong>Convert All</strong>
   </div>
 </div>
-<div class="footer">
-  <a href="/library">📚 Library</a> &middot; Open source &middot; Powered by Chrome headless
-</div>
+</main>
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div class="footer-links">
+      <a href="/library">📚 Library</a>
+      <a href="https://github.com/wesley99i/x-article-pdf" target="_blank">GitHub</a>
+    </div>
+    <div class="footer-info">x-article-pdf &middot; Chrome headless</div>
+  </div>
+</footer>
 <script>
 const form = document.getElementById('form');
 const btn = document.getElementById('btn');
@@ -621,6 +693,17 @@ const spinner = document.getElementById('spinner');
 const resultsDiv = document.getElementById('results');
 const pasteBtn = document.getElementById('pasteBtn');
 const urlsInput = document.getElementById('urls');
+
+// Hamburger menu toggle for mobile
+const hamburger = document.getElementById('hamburger');
+const siteNav = document.getElementById('siteNav');
+hamburger.addEventListener('click', () => {
+  siteNav.classList.toggle('open');
+});
+// Close nav when a link is clicked (mobile)
+siteNav.addEventListener('click', () => {
+  siteNav.classList.remove('open');
+});
 
 // Paste button — reads clipboard and fills textarea
 pasteBtn.addEventListener('click', async () => {
@@ -874,7 +957,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             <td class="fname"><a href="/download/{urllib.parse.quote(f['name'])}">{f['title'][:80]}</a></td>
             <td class="fsize">{f['size_kb']:.0f} KB</td>
             <td class="fdate">{f['mtime']}</td>
-            <td class factions">
+            <td class="factions">
               <a class="dl-btn" href="/download/{urllib.parse.quote(f['name'])}?dl=1">⬇ Download</a>
             </td>
           </tr>"""
@@ -893,7 +976,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 body {{
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: #000; color: #e7e9ea;
-  min-height: 100vh; padding: 40px 16px;
+  min-height: 100vh; display: flex; flex-direction: column;
 }}
 .card {{
   background: #15181c; border-radius: 16px;
@@ -917,9 +1000,68 @@ td {{ padding: 10px 4px; border-bottom: 1px solid #1d1f23; font-size: 14px; }}
 .back {{ display: inline-block; margin-top: 20px; color: #1d9bf0; text-decoration: none; font-size: 14px; }}
 .back:hover {{ text-decoration: underline; }}
 .count {{ color: #71767b; font-size: 13px; margin-bottom: 16px; }}
+/* ── shared header/nav/footer ── */
+.site-header {{
+  background: #15181c; border-bottom: 1px solid #2f3336;
+  position: sticky; top: 0; z-index: 100;
+}}
+.header-inner {{
+  max-width: 800px; margin: 0 auto;
+  padding: 12px 16px; display: flex;
+  align-items: center; justify-content: space-between;
+}}
+.site-logo {{
+  font-size: 18px; font-weight: 700; color: #e7e9ea;
+  text-decoration: none; display: flex; align-items: center; gap: 6px;
+}}
+.site-nav {{ display: flex; gap: 24px; align-items: center; }}
+.nav-link {{
+  color: #71767b; text-decoration: none; font-size: 14px; font-weight: 500;
+}}
+.nav-link:hover, .nav-link.active {{ color: #e7e9ea; }}
+.hamburger {{
+  display: none; background: none; border: none; color: #e7e9ea;
+  font-size: 24px; cursor: pointer; padding: 4px; line-height: 1;
+}}
+@media (max-width: 600px) {{
+  .site-nav {{ display: none; }}
+  .site-nav.open {{
+    display: flex; position: absolute; top: 100%; left: 0; right: 0;
+    background: #15181c; flex-direction: column; padding: 8px 16px 16px;
+    gap: 12px; border-bottom: 1px solid #2f3336;
+  }}
+  .hamburger {{ display: block; }}
+}}
+.main-content {{
+  max-width: 800px; margin: 0 auto; padding: 24px 16px;
+  flex: 1; width: 100%;
+}}
+.site-footer {{
+  border-top: 1px solid #2f3336; background: #15181c;
+}}
+.footer-inner {{
+  max-width: 800px; margin: 0 auto; padding: 16px;
+  display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: 8px;
+}}
+.footer-links {{ display: flex; gap: 16px; }}
+.footer-links a {{ color: #71767b; text-decoration: none; font-size: 13px; }}
+.footer-links a:hover {{ color: #1d9bf0; }}
+.footer-info {{ color: #536471; font-size: 12px; }}
 </style>
 </head>
 <body>
+<header class="site-header">
+  <div class="header-inner">
+    <a href="/" class="site-logo">📄 X Article → PDF</a>
+    <nav class="site-nav" id="siteNav">
+      <a href="/" class="nav-link">Converter</a>
+      <a href="/library" class="nav-link active">Library</a>
+    </nav>
+    <button class="hamburger" id="hamburger" aria-label="Menu">☰</button>
+  </div>
+</header>
+<main class="main-content">
 <div class="card">
   <h1>📄 PDF Library</h1>
   <p class="sub">Saved X articles on this server</p>
@@ -928,8 +1070,23 @@ td {{ padding: 10px 4px; border-bottom: 1px solid #1d1f23; font-size: 14px; }}
     <thead><tr><th>Title</th><th>Size</th><th>Date</th><th></th></tr></thead>
     <tbody>{file_rows}</tbody>
   </table>
-  <a class="back" href="/">← Back to converter</a>
 </div>
+</main>
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div class="footer-links">
+      <a href="/library">📚 Library</a>
+      <a href="https://github.com/wesley99i/x-article-pdf" target="_blank">GitHub</a>
+    </div>
+    <div class="footer-info">x-article-pdf &middot; Chrome headless</div>
+  </div>
+</footer>
+<script>
+const hamburger = document.getElementById('hamburger');
+const siteNav = document.getElementById('siteNav');
+hamburger.addEventListener('click', () => {{ siteNav.classList.toggle('open'); }});
+siteNav.addEventListener('click', () => {{ siteNav.classList.remove('open'); }});
+</script>
 </body>
 </html>"""
         return html
