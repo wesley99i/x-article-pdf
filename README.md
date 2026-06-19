@@ -6,6 +6,8 @@ Convert X/Twitter articles to dark-themed, styled PDFs for offline reading. All 
 
 - **CLI tool** — `x-article-pdf <url>` — one-shot conversion from the terminal
 - **Web app** — `x-article-web` — serves a web UI on your LAN for mobile/tablet access
+- **Batch conversion** — paste multiple X article links in the web app, convert all at once, download from clickable server links
+- **Paste button** — reads clipboard directly via browser API for one-click pasting
 - **Dark theme** — matches X's article aesthetic (black background, white text, blue accents)
 - **All images embedded** — cover art, author avatar, and body images are pre-downloaded as base64 — no network needed during PDF generation
 - **No API auth required** — uses the public fxtwitter API
@@ -50,6 +52,8 @@ x-article-web --port 9000
 ```
 
 Then open `http://<your-ip>:8765/` on any device on your network.
+
+**Batch conversion:** Paste multiple X article URLs (one per line) into the textarea, or click the **📋 Paste** button to read directly from your clipboard. Click **Convert All** — each article is fetched, converted to PDF, and saved to `~/Downloads/x-articles/`. Results show clickable download links for successful conversions and error messages for any failures.
 
 ## How It Works
 

@@ -555,6 +555,29 @@ PAGE_HTML = """\
  .example { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2f3336; font-size: 13px; color: #536471; }
  .example code { color: #71767b; background: #0f0f0f; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
  .logo { font-size: 28px; margin-bottom: 12px; }
+ .input-row { display: flex; gap: 8px; align-items: flex-start; }
+ textarea {
+   flex: 1; padding: 12px 16px; border-radius: 8px;
+   border: 1px solid #2f3336; background: #000; color: #e7e9ea;
+   font-size: 15px; outline: none; font-family: inherit; resize: vertical;
+ }
+ textarea:focus { border-color: #1d9bf0; }
+ .paste-btn {
+   padding: 12px 16px; background: #1d9bf0; color: #fff;
+   border: none; border-radius: 8px; font-size: 14px; font-weight: 600;
+   cursor: pointer; white-space: nowrap; flex-shrink: 0;
+ }
+ .paste-btn:hover { background: #1a8cd8; }
+ .results { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2f3336; display: none; }
+ .results h3 { font-size: 16px; margin-bottom: 12px; }
+ .result-list { max-height: 400px; overflow-y: auto; }
+ .result-item { padding: 8px 12px; margin-bottom: 6px; border-radius: 8px; font-size: 14px; }
+ .result-item.ok { background: #0a1a0a; border: 1px solid #1a3a1a; }
+ .result-item.error { background: #1a0a0a; border: 1px solid #3a1a1a; color: #f4212e; }
+ .result-item a { color: #1d9bf0; text-decoration: none; word-break: break-all; }
+ .result-item a:hover { text-decoration: underline; }
+ .result-item .size { color: #71767b; font-size: 12px; }
+ .result-summary { margin-top: 12px; font-size: 13px; color: #71767b; text-align: center; }
  .footer { margin-top: 24px; font-size: 12px; color: #536471; text-align: center; }
  .footer a { color: #1d9bf0; text-decoration: none; }
  .spinner { display: none; margin: 12px auto 0; width: 24px; height: 24px;
@@ -567,18 +590,23 @@ PAGE_HTML = """\
 <div class="card">
   <div class="logo">📄</div>
   <h1>X Article → PDF</h1>
-  <p class="sub">Paste an X article link to download a styled PDF for offline reading.</p>
-  <form id="form" method="POST" action="/convert">
-    <label for="url">Article URL</label>
-    <input type="url" id="url" name="url"
-           placeholder="https://x.com/user/status/1234567890"
-           required autofocus>
-    <button type="submit" id="btn">Convert to PDF</button>
+  <p class="sub">Paste one or more X article links to download styled PDFs for offline reading.</p>
+  <form id="form" method="POST" action="/convert-batch">
+    <label for="urls">Article URLs</label>
+    <div class="input-row">
+      <textarea id="urls" name="urls"
+                placeholder="Paste X article URLs here, one per line"
+                rows="6" required autofocus></textarea>
+      <button type="button" class="paste-btn" id="pasteBtn">📋 Paste</button>
+    </div>
+    <button type="submit" id="btn">Convert All to PDF</button>
   </form>
   <div id="status" class="status"></div>
   <div id="spinner" class="spinner"></div>
+  <div id="results" class="results"></div>
   <div class="example">
-    Example: <code>https://x.com/IBuzovskyi/status/2066145326780518736</code>
+    Example: <code>https://x.com/IBuzovskyi/status/2066145326780518736</code><br>
+    Paste multiple URLs — one per line — and click <strong>Convert All</strong>
   </div>
 </div>
 <div class="footer">
@@ -589,45 +617,72 @@ const form = document.getElementById('form');
 const btn = document.getElementById('btn');
 const status = document.getElementById('status');
 const spinner = document.getElementById('spinner');
+const resultsDiv = document.getElementById('results');
+const pasteBtn = document.getElementById('pasteBtn');
+const urlsInput = document.getElementById('urls');
+
+// Paste button — reads clipboard and fills textarea
+pasteBtn.addEventListener('click', async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    urlsInput.value = text;
+    status.className = 'status ok';
+    status.textContent = 'Pasted ' + text.split('\n').filter(l => l.trim()).length + ' URL(s)';
+  } catch (err) {
+    status.className = 'status error';
+    status.textContent = 'Could not read clipboard — paste manually or check browser permissions';
+  }
+});
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const url = document.getElementById('url').value.trim();
-  if (!url) return;
+  const urls = urlsInput.value.trim();
+  if (!urls) return;
 
   btn.disabled = true;
-  status.className = 'status';
-  status.textContent = 'Fetching article and generating PDF…';
   spinner.style.display = 'block';
+  status.className = 'status';
+  status.textContent = 'Converting articles…';
+  resultsDiv.style.display = 'none';
 
   try {
-    const resp = await fetch('/convert', {
+    const resp = await fetch('/convert-batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'url=' + encodeURIComponent(url),
+      body: 'urls=' + encodeURIComponent(urls),
     });
 
+    const result = await resp.json();
+    spinner.style.display = 'none';
+
     if (!resp.ok) {
-      const err = await resp.text();
       status.className = 'status error';
-      status.textContent = err || 'Something went wrong';
-      spinner.style.display = 'none';
+      status.textContent = result.error || 'Something went wrong';
+      btn.disabled = false;
       return;
     }
 
-    // Stream the PDF download
-    const blob = await resp.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = resp.headers.get('X-Filename') || 'article.pdf';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(a.href);
+    // Render results list
+    resultsDiv.style.display = 'block';
+    let html = '<h3>Results</h3><div class="result-list">';
+    let okCount = 0, failCount = 0;
+    for (const item of result.results) {
+      if (item.success) {
+        okCount++;
+        html += '<div class="result-item ok">✅ <a href="' + item.download_url + '" target="_blank">'
+             + item.title + '</a> <span class="size">(' + item.size_kb + ' KB)</span></div>';
+      } else {
+        failCount++;
+        html += '<div class="result-item error">❌ ' + item.url + ' — ' + item.error + '</div>';
+      }
+    }
+    html += '</div>';
+    html += '<div class="result-summary">' + okCount + ' converted, ' + failCount + ' failed</div>';
+    resultsDiv.innerHTML = html;
 
     status.className = 'status ok';
-    status.textContent = '✅ Downloaded! Also saved to server at ~/Downloads/x-articles/';
-    spinner.style.display = 'none';
+    const p = okCount === 1 ? '' : 's';
+    status.textContent = 'Done — ' + okCount + ' PDF' + p + ' saved to ~/Downloads/x-articles/';
   } catch (err) {
     status.className = 'status error';
     status.textContent = 'Network error — is the server running?';
@@ -665,15 +720,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/" or self.path == "/index.html":
             self._send_html(200, PAGE_HTML)
+        elif self.path.startswith("/download/"):
+            filename = urllib.parse.unquote(self.path[len("/download/"):])
+            # Prevent path traversal
+            if ".." in filename or "/" in filename:
+                self.send_response(403)
+                self.end_headers()
+                return
+            filepath = DOWNLOAD_DIR / filename
+            if not filepath.exists():
+                self.send_response(404)
+                self.end_headers()
+                return
+            with open(filepath, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_POST(self):
-        if self.path != "/convert":
+        if self.path == "/convert":
+            self._handle_single_convert()
+        elif self.path == "/convert-batch":
+            self._handle_convert_batch()
+        else:
             self._send_json(404, {"error": "Not found"})
-            return
 
+    def _handle_single_convert(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode("utf-8")
         params = urllib.parse.parse_qs(body)
@@ -716,6 +795,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(500, {"error": "PDF generation timed out (article may be very long)"})
         except Exception as e:
             self._send_json(500, {"error": f"Internal error: {e}"})
+
+    def _handle_convert_batch(self):
+        """Convert multiple URLs, save to disk, return JSON with download links."""
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8")
+        params = urllib.parse.parse_qs(body)
+        urls_text = (params.get("urls") or [""])[0].strip()
+
+        if not urls_text:
+            self._send_json(400, {"error": "At least one URL is required"})
+            return
+
+        # Parse URLs — one per line
+        urls = [u.strip() for u in urls_text.split("\n") if u.strip()]
+
+        results = []
+        for url in urls:
+            try:
+                tweet_id = extract_tweet_id(url)
+                if not tweet_id:
+                    results.append({"url": url, "success": False, "error": "Invalid X/Twitter URL"})
+                    continue
+
+                data = fetch_article(tweet_id)
+                html = render_html(data)
+                pdf_bytes, pdf_path = generate_pdf(html, tweet_id, data["title"])
+
+                safe_title = re.sub(r'[^\w\s-]', "", data["title"])[:60].strip().replace(" ", "_")
+                filename = f"{safe_title}.pdf" if safe_title else f"{tweet_id}-article.pdf"
+
+                size_kb = round(len(pdf_bytes) / 1024)
+                print(f"  ✓ {data['title'][:60]}… → {pdf_path} ({size_kb} KB)", flush=True)
+
+                results.append({
+                    "url": url,
+                    "success": True,
+                    "title": data["title"][:80],
+                    "filename": filename,
+                    "download_url": f"/download/{urllib.parse.quote(filename)}",
+                    "size_kb": size_kb,
+                })
+            except ValueError as e:
+                results.append({"url": url, "success": False, "error": str(e)})
+            except urllib.error.URLError:
+                results.append({"url": url, "success": False, "error": "Network error fetching article"})
+            except subprocess.TimeoutExpired:
+                results.append({"url": url, "success": False, "error": "PDF generation timed out"})
+            except Exception as e:
+                results.append({"url": url, "success": False, "error": str(e)[:100]})
+
+        self._send_json(200, {"results": results})
 
 
 def get_local_ip() -> str:
