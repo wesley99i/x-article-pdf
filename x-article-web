@@ -555,20 +555,21 @@ PAGE_HTML = """\
  .example { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2f3336; font-size: 13px; color: #536471; }
  .example code { color: #71767b; background: #0f0f0f; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
  .logo { font-size: 28px; margin-bottom: 12px; }
- .input-row { display: flex; gap: 8px; align-items: flex-start; }
- textarea {
-   flex: 1; padding: 12px 16px; border-radius: 8px;
-   border: 1px solid #2f3336; background: #000; color: #e7e9ea;
-   font-size: 15px; outline: none; font-family: inherit; resize: vertical;
- }
- textarea:focus { border-color: #1d9bf0; }
+ .input-row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 0; }
  .paste-btn {
-   padding: 12px 16px; background: #1d9bf0; color: #fff;
-   border: none; border-radius: 8px; font-size: 14px; font-weight: 600;
-   cursor: pointer; white-space: nowrap; flex-shrink: 0;
+   padding: 6px 14px; background: #1d9bf0; color: #fff;
+   border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
+   cursor: pointer;
  }
  .paste-btn:hover { background: #1a8cd8; }
- .results { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2f3336; display: none; }
+ textarea {
+   width: 100%; padding: 12px 16px; border-radius: 8px;
+   border: 1px solid #2f3336; background: #000; color: #e7e9ea;
+   font-size: 15px; outline: none; font-family: inherit; resize: vertical;
+   box-sizing: border-box;
+   }
+   textarea:focus { border-color: #1d9bf0; }
+   .results { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2f3336; display: none; }
  .results h3 { font-size: 16px; margin-bottom: 12px; }
  .result-list { max-height: 400px; overflow-y: auto; }
  .result-item { padding: 8px 12px; margin-bottom: 6px; border-radius: 8px; font-size: 14px; }
@@ -594,11 +595,11 @@ PAGE_HTML = """\
   <form id="form" method="POST" action="/convert-batch">
     <label for="urls">Article URLs</label>
     <div class="input-row">
-      <textarea id="urls" name="urls"
-                placeholder="Paste X article URLs here, one per line"
-                rows="6" required autofocus></textarea>
-      <button type="button" class="paste-btn" id="pasteBtn">📋 Paste</button>
+      <button type="button" class="paste-btn" id="pasteBtn">📋 Paste from clipboard</button>
     </div>
+    <textarea id="urls" name="urls"
+              placeholder="Paste X article URLs here, one per line"
+              rows="8" required autofocus></textarea>
     <button type="submit" id="btn">Convert All to PDF</button>
   </form>
   <div id="status" class="status"></div>
