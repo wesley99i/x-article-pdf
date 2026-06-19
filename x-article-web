@@ -565,9 +565,9 @@ PAGE_HTML = """\
  textarea {
    width: 100%; padding: 12px 16px; border-radius: 8px;
    border: 1px solid #2f3336; background: #000; color: #e7e9ea;
-   font-size: 15px; outline: none; font-family: inherit; resize: vertical;
-   box-sizing: border-box;
-   }
+   font-size: 16px; outline: none; font-family: inherit; resize: vertical;
+   box-sizing: border-box; touch-action: manipulation;
+ }
    textarea:focus { border-color: #1d9bf0; }
    .results { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2f3336; display: none; }
  .results h3 { font-size: 16px; margin-bottom: 12px; }
@@ -599,7 +599,7 @@ PAGE_HTML = """\
     </div>
     <textarea id="urls" name="urls"
               placeholder="Paste X article URLs here, one per line"
-              rows="8" required autofocus></textarea>
+              rows="8" required></textarea>
     <button type="submit" id="btn">Convert All to PDF</button>
   </form>
   <div id="status" class="status"></div>
@@ -631,7 +631,7 @@ pasteBtn.addEventListener('click', async () => {
     status.textContent = 'Pasted ' + text.split('\n').filter(l => l.trim()).length + ' URL(s)';
   } catch (err) {
     status.className = 'status error';
-    status.textContent = 'Could not read clipboard — paste manually or check browser permissions';
+    status.textContent = 'Clipboard access requires HTTPS. Long-press the textarea and select Paste instead.';
   }
 });
 
